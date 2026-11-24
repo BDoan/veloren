@@ -28,6 +28,8 @@ pub use winit::platform::android::activity::AndroidApp;
 use winit::platform::android::activity::ndk_sys;
 
 static APP: OnceLock<AndroidApp> = OnceLock::new();
+/// File the panic hook writes to, shown as a popup on the next launch.
+static CRASH_FILE: OnceLock<PathBuf> = OnceLock::new();
 
 const ASSET_ARCHIVE: &str = "veloren-assets.bin";
 const ASSET_ARCHIVE_ID: &str = "veloren-assets.id";
@@ -51,11 +53,18 @@ pub fn main(app: AndroidApp) {
         .expect("Android did not provide an internal data path");
     let external = app.external_data_path();
 
-    // Userdata: settings, singleplayer worlds, screenshots and logs.
-    let userdata = external.unwrap_or_else(|| internal.clone()).join("userdata");
-    if let Err(e) = fs::create_dir_all(&userdata) {
-        log_line(&format!("Could not create userdata dir {}: {e}", userdata.display()));
+    // Settings and worlds live in private internal storage: the world
+    // database uses SQLite WAL mode, which needs a real local filesystem.
+    // Logs and screenshots go to app-specific external storage, which can be
+    // reached over USB (Android/data/net.veloren.android/files).
+    let userdata = internal.join("userdata");
+    let shared = external.unwrap_or_else(|| internal.clone());
+    for dir in [&userdata, &shared] {
+        if let Err(e) = fs::create_dir_all(dir) {
+            log_line(&format!("Could not create {}: {e}", dir.display()));
+        }
     }
+    let _ = CRASH_FILE.set(shared.join("last_crash.txt"));
 
     let assets = match unpack_assets(&app, &internal) {
         Ok(path) => path,
@@ -73,7 +82,8 @@ pub fn main(app: AndroidApp) {
         // Some code looks up the home and pictures folders, which Android
         // does not define.
         std::env::set_var("HOME", &userdata);
-        std::env::set_var("VOXYGEN_SCREENSHOT", userdata.join("screenshots"));
+        std::env::set_var("VOXYGEN_LOGS", shared.join("logs"));
+        std::env::set_var("VOXYGEN_SCREENSHOT", shared.join("screenshots"));
         std::env::set_var("RUST_BACKTRACE", "1");
         // Vulkan only: the GLES path is untested and much slower.
         std::env::set_var("WGPU_BACKEND", "vulkan");
@@ -89,6 +99,36 @@ pub fn main(app: AndroidApp) {
     // NativeActivity keeps the process alive after `android_main` returns,
     // and a second launch would find statics already initialised.
     std::process::exit(0);
+}
+
+/// Wrap the panic hook so the panic message is also saved to a file. With
+/// `panic = "abort"` the process dies right after, so this is the only chance
+/// to keep it. [`take_last_crash`] shows it on the next launch.
+pub fn record_crashes() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(path) = CRASH_FILE.get() {
+            let thread = std::thread::current();
+            let text = format!(
+                "{info}\n\nThread: {}\nVersion: {}",
+                thread.name().unwrap_or("unnamed"),
+                env!("CARGO_PKG_VERSION"),
+            );
+            let _ = fs::write(path, text);
+        }
+        previous(info);
+    }));
+}
+
+/// The panic saved by the previous run, if any (shown once).
+pub fn take_last_crash() -> Option<String> {
+    let path = CRASH_FILE.get()?;
+    let text = fs::read_to_string(path).ok()?;
+    let _ = fs::rename(path, path.with_file_name("last_crash_shown.txt"));
+    Some(format!(
+        "Veloren crashed last time. Please take a screenshot of this message.\n\n{}",
+        text.chars().take(1500).collect::<String>()
+    ))
 }
 
 /// Phone-friendly defaults, applied only when no settings file exists yet.

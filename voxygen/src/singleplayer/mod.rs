@@ -80,6 +80,11 @@ impl SingleplayerState {
             let server_data_dir = world.path.clone();
 
             let mut settings = server::Settings::singleplayer(&server_data_dir);
+            // No need to answer server-browser queries on the LAN from a phone.
+            #[cfg(target_os = "android")]
+            {
+                settings.query_address = None;
+            }
             let mut editable_settings = server::EditableSettings::singleplayer(&server_data_dir);
 
             let i18n = i18n.read();

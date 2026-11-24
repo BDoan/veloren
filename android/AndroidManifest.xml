@@ -7,6 +7,10 @@
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true" />
     <uses-feature android:name="android.hardware.touchscreen.multitouch" android:required="false" />
 
+    <!-- Single player runs Veloren's server inside the app; it listens on a
+         localhost port, and Android refuses all sockets without this. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:label="Veloren"
         android:icon="@mipmap/ic_launcher"

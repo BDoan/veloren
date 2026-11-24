@@ -74,6 +74,8 @@ pub fn start(args: cli::Args) {
     settings.display_warnings();
 
     panic_handler::set_panic_hook(log_filename, logs_dir);
+    #[cfg(target_os = "android")]
+    crate::android::record_crashes();
 
     // Setup tokio runtime
     use common::consts::MIN_RECOMMENDED_TOKIO_THREADS;
@@ -201,6 +203,9 @@ pub fn start(args: cli::Args) {
             1.0 / get_fps(settings.graphics.max_fps) as f64,
         )),
         settings,
+        #[cfg(target_os = "android")]
+        info_message: crate::android::take_last_crash(),
+        #[cfg(not(target_os = "android"))]
         info_message: None,
         #[cfg(feature = "singleplayer")]
         singleplayer: SingleplayerState::None,

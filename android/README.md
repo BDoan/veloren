@@ -35,13 +35,10 @@ for a few seconds.
 
 ## Where files go
 
-Settings, worlds and logs are kept in the app's external storage folder:
-`Android/data/net.veloren.android/files/userdata/`
-
-- Logs: `.../userdata/voxygen/logs/`. Connect the phone to a PC over USB to copy them.
-- Live log: `adb logcat -s veloren`
-
-Uninstalling the app deletes this folder, including your worlds.
+- **Settings and worlds:** the app's private storage. They are deleted when you uninstall.
+- **Logs and screenshots:** `Android/data/net.veloren.android/files/`, which you can reach from a PC over USB.
+- **Crashes:** if the game crashes, the error is shown as a popup the next time it starts, so you can screenshot it.
+- **Live log:** `adb logcat -s veloren`
 
 ## Building locally
 
