@@ -104,7 +104,7 @@ impl DebugPipeline {
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: Some(wgpu::Face::Back),
-                unclipped_depth: true,
+                unclipped_depth: device.features().contains(wgpu::Features::DEPTH_CLIP_CONTROL),
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },

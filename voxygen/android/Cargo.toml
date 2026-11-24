@@ -1,0 +1,18 @@
+[package]
+name = "veloren-voxygen-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Android entry point (NativeActivity cdylib) for Voxygen"
+publish = false
+
+[lib]
+name = "veloren_voxygen_android"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[target.'cfg(target_os = "android")'.dependencies]
+voxygen = { package = "veloren-voxygen", path = "..", default-features = false, features = [
+    "singleplayer",
+    "simd",
+] }

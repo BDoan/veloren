@@ -248,6 +248,11 @@ widget_ids! {
         crosshair_outer,
         crosshair_charge,
 
+        // Touch controls overlay
+        touch_fills[],
+        touch_rings[],
+        touch_labels[],
+
         // SCT
         player_scts[],
         player_sct_bgs[],
@@ -1624,6 +1629,8 @@ impl Hud {
                     .color(TEXT_COLOR)
                     .mid_top_with_margin_on(ui_widgets.window, 2.0)
                     .set(self.ids.version, ui_widgets);
+
+                global_state.window.touch_mut().player_dead = health.is_dead;
 
                 // Death Frame
                 if health.is_dead {
@@ -4737,6 +4744,72 @@ impl Hud {
                 Intro::Never => {
                     self.show.intro = false;
                 },
+            }
+        }
+
+        // Touch controls (Android): drawn last so they sit on top of the HUD.
+        let touch_visuals = global_state.window.touch().visuals();
+        if !touch_visuals.is_empty() {
+            use crate::touch::VisualStyle;
+            let s = scale.scale_factor_logical() as f32;
+            let size = global_state.window.logical_size();
+            let n = touch_visuals.len();
+            if self.ids.touch_fills.len() < n {
+                self.ids
+                    .touch_fills
+                    .resize(n, &mut ui_widgets.widget_id_generator());
+                self.ids
+                    .touch_rings
+                    .resize(n, &mut ui_widgets.widget_id_generator());
+                self.ids
+                    .touch_labels
+                    .resize(n, &mut ui_widgets.widget_id_generator());
+            }
+            for (i, v) in touch_visuals.iter().enumerate() {
+                let x = ((v.center.x - size.x / 2.0) / s) as f64;
+                let y = (-(v.center.y - size.y / 2.0) / s) as f64;
+                let r = (v.radius / s) as f64;
+                let (fill, ring) = match (v.style, v.pressed) {
+                    (VisualStyle::StickBase, _) => (
+                        Color::Rgba(0.0, 0.0, 0.0, 0.18),
+                        Color::Rgba(1.0, 1.0, 1.0, 0.35),
+                    ),
+                    (VisualStyle::StickKnob, pressed) => (
+                        Color::Rgba(1.0, 1.0, 1.0, if pressed { 0.55 } else { 0.3 }),
+                        Color::Rgba(1.0, 1.0, 1.0, 0.6),
+                    ),
+                    (VisualStyle::Button, false) => (
+                        Color::Rgba(0.05, 0.05, 0.08, 0.38),
+                        Color::Rgba(1.0, 1.0, 1.0, 0.45),
+                    ),
+                    (VisualStyle::Button, true) => (
+                        Color::Rgba(1.0, 1.0, 1.0, 0.42),
+                        Color::Rgba(1.0, 1.0, 1.0, 0.85),
+                    ),
+                };
+                widget::Circle::fill_with(r, fill)
+                    .x_y(x, y)
+                    .graphics_for(ui_widgets.window)
+                    .set(self.ids.touch_fills[i], ui_widgets);
+                widget::Circle::outline_styled(
+                    r,
+                    widget::primitive::line::Style::solid().thickness(2.0),
+                )
+                .color(ring)
+                .x_y(x, y)
+                .graphics_for(ui_widgets.window)
+                .set(self.ids.touch_rings[i], ui_widgets);
+                if !v.label.is_empty() {
+                    let len = v.label.chars().count().max(1) as f64;
+                    let font_size = (r * 0.55).min(2.6 * r / len).max(6.0);
+                    Text::new(v.label)
+                        .x_y(x, y)
+                        .font_id(self.fonts.cyri.conrod_id)
+                        .font_size(self.fonts.cyri.scale(font_size as u32))
+                        .color(Color::Rgba(1.0, 1.0, 1.0, 0.92))
+                        .graphics_for(ui_widgets.window)
+                        .set(self.ids.touch_labels[i], ui_widgets);
+                }
             }
         }
 

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Veloren for Android (unofficial personal port). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="net.veloren.android">
+
+    <!-- Vulkan 1.1 is required (wgpu's Vulkan backend). -->
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true" />
+    <uses-feature android:name="android.hardware.touchscreen.multitouch" android:required="false" />
+
+    <application
+        android:label="Veloren"
+        android:icon="@mipmap/ic_launcher"
+        android:hasCode="true"
+        android:extractNativeLibs="true"
+        android:allowBackup="false"
+        android:appCategory="game"
+        android:isGame="true"
+        android:resizeableActivity="true">
+
+        <!-- configChanges: folding/unfolding, rotation and keyboard changes must not
+             restart the game (that would drop the running world). -->
+        <activity
+            android:name=".VelorenActivity"
+            android:exported="true"
+            android:theme="@style/VelorenTheme"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|density|uiMode|fontScale|layoutDirection|locale|touchscreen|colorMode">
+            <meta-data android:name="android.app.lib_name" android:value="veloren_voxygen_android" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

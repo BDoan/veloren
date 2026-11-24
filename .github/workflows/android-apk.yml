@@ -1,0 +1,96 @@
+# Builds the Android APK on every push to the `android` branch and publishes it
+# as a GitHub Release (download it from the Releases page on your phone).
+name: Android APK
+
+on:
+  push:
+    branches: [android]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 27.2.12479018
+  CARGO_TERM_COLOR: never
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            /usr/local/lib/node_modules /usr/share/swift /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install "$(cat rust-toolchain)" --profile minimal \
+            --target aarch64-linux-android
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android
+          cache-on-failure: true
+
+      - name: cargo-ndk
+        run: cargo install cargo-ndk --locked --version 4.1.2
+
+      - name: Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;$NDK_VERSION" "build-tools;35.0.0" "platforms;android-35" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Build native library
+        run: android/build.sh -j "$(nproc)"
+
+      - name: Package APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          # Use your own signing key if you add these repository secrets;
+          # otherwise the debug key committed in android/ is used.
+          if [ -n "$ANDROID_KEYSTORE_B64" ]; then
+            echo "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            export ANDROID_KEYSTORE="$RUNNER_TEMP/release.keystore"
+          else
+            unset ANDROID_KEYSTORE_PASSWORD
+          fi
+          android/scripts/package.sh
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="android-${{ github.run_number }}"
+          gh release create "$TAG" target/apk/veloren-android-*.apk \
+            --target "${{ github.sha }}" --latest \
+            --title "Veloren Android build ${{ github.run_number }}" \
+            --notes "Built from ${{ github.sha }}. Download the .apk on your phone and open it to install (allow installing from your browser/Files app when asked). First launch unpacks the game data, which takes a few seconds."
+          # Keep only the 3 newest builds (each is ~400 MB).
+          gh release list --limit 100 --json tagName --jq '.[].tagName' \
+            | grep '^android-' | tail -n +4 \
+            | xargs -r -n1 gh release delete --cleanup-tag -y
+
+      - name: Keep the APK as a workflow artifact too
+        uses: actions/upload-artifact@v4
+        with:
+          name: veloren-android-apk
+          path: target/apk/veloren-android-*.apk
+          compression-level: 0
+          retention-days: 7

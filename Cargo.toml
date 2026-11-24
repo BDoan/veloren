@@ -21,6 +21,7 @@ members = [
     "server/agent",
     "server-cli",
     "voxygen",
+    "voxygen/android",
     "voxygen/anim",
     "voxygen/credentialstore",
     "voxygen/egui",
@@ -136,6 +137,12 @@ debug = "line-tables-only"
 [profile.release-thinlto]
 inherits = 'release'
 lto = "thin"
+
+# Android APK builds: release optimisations without fat LTO, which needs more RAM
+# than a small build machine has. Debug info is stripped from the APK copy.
+[profile.android]
+inherits = 'release'
+lto = false
 
 # used for cargo bench
 [profile.bench]

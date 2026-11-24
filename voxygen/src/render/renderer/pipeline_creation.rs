@@ -1,8 +1,10 @@
 use crate::render::{
     pipelines::rain_occlusion,
-    renderer::compiler::{ShaderCCompiler, ShaderStage, WgpuCompiler},
+    renderer::compiler::{ShaderStage, WgpuCompiler},
 };
 
+#[cfg(not(target_os = "android"))]
+use super::super::renderer::compiler::ShaderCCompiler;
 use super::{
     super::{
         AaMode, BloomMode, CloudMode, ExperimentalShader, FluidMode, LightingMode, PipelineModes,
@@ -313,10 +315,17 @@ impl ShaderModules {
             })
         };
 
+        #[cfg(not(target_os = "android"))]
         let mut compiler: Box<dyn super::compiler::Compiler> = if pipeline_modes.enable_naga {
             Box::new(WgpuCompiler::new(fetch_include)?)
         } else {
             Box::new(ShaderCCompiler::new(shaderc_opts, fetch_include)?)
+        };
+        // shaderc is not built for Android; naga's GLSL frontend is the default anyway.
+        #[cfg(target_os = "android")]
+        let mut compiler: Box<dyn super::compiler::Compiler> = {
+            let _ = shaderc_opts;
+            Box::new(WgpuCompiler::new(fetch_include)?)
         };
 
         let mut create_shader = move |name, stage| {

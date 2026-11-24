@@ -7,7 +7,9 @@ pub enum RenderError {
     CustomError(String),
     CouldNotFindAdapter,
     RequestAdapterError(wgpu::RequestAdapterError),
+    #[cfg(not(target_os = "android"))]
     ErrorInitializingShaderCCompiler(shaderc::Error),
+    #[cfg(not(target_os = "android"))]
     ShaderShaderCError(String, shaderc::Error),
     ShaderWgpuError(String, wgpu::Error),
 }
@@ -32,10 +34,12 @@ impl fmt::Debug for RenderError {
                 // Use Display formatting for this error since they have nice descriptions
                 .field(&err.to_string())
                 .finish(),
+            #[cfg(not(target_os = "android"))]
             Self::ErrorInitializingShaderCCompiler(err) => f
                 .debug_tuple("ErrorInitializingShaderCCompiler")
                 .field(err)
                 .finish(),
+            #[cfg(not(target_os = "android"))]
             Self::ShaderShaderCError(shader_name, err) => write!(
                 f,
                 "\"{shader_name}\" shader failed to compile with shaderc due to the following \
@@ -66,10 +70,12 @@ impl From<wgpu::RequestAdapterError> for RenderError {
     fn from(err: wgpu::RequestAdapterError) -> Self { Self::RequestAdapterError(err) }
 }
 
+#[cfg(not(target_os = "android"))]
 impl From<shaderc::Error> for RenderError {
     fn from(err: shaderc::Error) -> Self { Self::ErrorInitializingShaderCCompiler(err) }
 }
 
+#[cfg(not(target_os = "android"))]
 impl From<(&str, shaderc::Error)> for RenderError {
     fn from((shader_name, err): (&str, shaderc::Error)) -> Self {
         Self::ShaderShaderCError(shader_name.into(), err)

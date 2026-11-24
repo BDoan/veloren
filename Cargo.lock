@@ -9317,6 +9317,7 @@ dependencies = [
  "kira",
  "lazy_static",
  "levenshtein",
+ "libc",
  "mimalloc",
  "mumble-link",
  "native-dialog",
@@ -9361,6 +9362,13 @@ dependencies = [
  "window_clipboard",
  "winit",
  "winres",
+]
+
+[[package]]
+name = "veloren-voxygen-android"
+version = "0.18.0"
+dependencies = [
+ "veloren-voxygen",
 ]
 
 [[package]]

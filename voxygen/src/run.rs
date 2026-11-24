@@ -30,9 +30,11 @@ pub fn run(
 
     let mut poll_span = None;
     let mut event_span = None;
+    // Whether we paused singleplayer because the app went to the background.
+    let mut paused_by_suspend = false;
 
     #[expect(deprecated)]
-    event_loop.run(move |event, event_loop| {
+    event_loop.run(move |mut event, event_loop| {
         // Continuously run loop since we handle sleeping
         event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
@@ -49,6 +51,35 @@ pub fn run(
                 if response.consumed {
                     return;
                 }
+            }
+        }
+
+        // Android's back button arrives as BrowserBack; treat it as Escape so it
+        // opens/closes menus like on desktop.
+        #[cfg(target_os = "android")]
+        if let winit::event::Event::WindowEvent {
+            event: winit::event::WindowEvent::KeyboardInput { event: key, .. },
+            ..
+        } = &mut event
+            && key.logical_key
+                == winit::keyboard::Key::Named(winit::keyboard::NamedKey::BrowserBack)
+        {
+            key.logical_key = winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape);
+        }
+
+        // Touches (and emulated touches on desktop) are turned into UI/game
+        // events by `touch::TouchControls`, so the UIs must not see them raw.
+        if let winit::event::Event::WindowEvent { event, .. } = &event {
+            if global_state.window.emulate_touch(event) {
+                return;
+            }
+            if global_state.window.touch().enabled()
+                && matches!(event, winit::event::WindowEvent::Touch(_))
+            {
+                global_state
+                    .window
+                    .handle_window_event(event.clone(), &mut global_state.settings);
+                return;
             }
         }
 
@@ -109,6 +140,31 @@ pub fn run(
                 global_state
                     .window
                     .handle_window_event(event, &mut global_state.settings)
+            },
+            // Android destroys the native window when the app goes to the
+            // background and creates a new one when it comes back.
+            winit::event::Event::Suspended => {
+                debug!("Suspended: releasing window surface");
+                global_state.window.suspend();
+                global_state.audio.set_master_volume(0.0);
+                #[cfg(feature = "singleplayer")]
+                if global_state.singleplayer.as_running().is_some() && !global_state.paused() {
+                    global_state.pause();
+                    paused_by_suspend = true;
+                }
+            },
+            winit::event::Event::Resumed => {
+                if global_state.window.is_suspended() {
+                    debug!("Resumed: recreating window surface");
+                    global_state.window.resume();
+                    global_state
+                        .audio
+                        .set_master_volume(global_state.settings.audio.master_volume.get_checked());
+                }
+                #[cfg(feature = "singleplayer")]
+                if std::mem::take(&mut paused_by_suspend) {
+                    global_state.unpause();
+                }
             },
             winit::event::Event::DeviceEvent { event, .. } => {
                 span!(_guard, "Handle DeviceEvent");

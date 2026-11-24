@@ -254,6 +254,14 @@ pub struct Window {
     // saved to file, so initialized here
     pub gamelayer_mod1: bool,
     pub gamelayer_mod2: bool,
+    /// True while the OS has taken our native window away (Android).
+    suspended: bool,
+    /// On-screen touch controls (Android, or desktop touch emulation).
+    touch: crate::touch::TouchControls,
+    /// Desktop touch emulation: last cursor position and whether the left
+    /// button (our fake finger) is down.
+    emulated_finger: Option<bool>,
+    emulated_cursor: Vec2<f32>,
 }
 
 impl Window {
@@ -261,7 +269,20 @@ impl Window {
         settings: &Settings,
         runtime: &tokio::runtime::Runtime,
     ) -> Result<(Window, EventLoop), Error> {
+        #[cfg(not(target_os = "android"))]
         let event_loop = EventLoop::new().unwrap();
+        // On Android the event loop must be bound to the activity, and the
+        // native window only exists once the activity has been resumed.
+        #[cfg(target_os = "android")]
+        let event_loop = {
+            use winit::platform::android::EventLoopBuilderExtAndroid;
+            let mut event_loop = winit::event_loop::EventLoop::builder()
+                .with_android_app(crate::android::app().clone())
+                .build()
+                .unwrap();
+            crate::android::wait_for_native_window(&mut event_loop);
+            event_loop
+        };
 
         let window = settings.graphics.window;
 
@@ -274,7 +295,7 @@ impl Window {
             ))
             .with_maximized(window.maximised);
 
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "android")))]
         {
             use winit::platform::wayland::WindowAttributesExtWayland;
             attributes = attributes.with_name("net.veloren.veloren", "veloren");
@@ -367,7 +388,13 @@ impl Window {
             toggle_fullscreen: false,
             gamelayer_mod1: true,
             gamelayer_mod2: false,
+            suspended: false,
+            touch: crate::touch::TouchControls::new(),
+            emulated_finger: None,
+            emulated_cursor: Vec2::zero(),
         };
+        let logical = this.logical_size();
+        this.touch.set_size(logical);
 
         this.set_fullscreen_mode(settings.graphics.fullscreen);
 
@@ -375,6 +402,83 @@ impl Window {
     }
 
     pub fn renderer(&self) -> &Renderer { &self.renderer }
+
+    /// The OS destroyed our native window (Android: app sent to background).
+    pub fn suspend(&mut self) {
+        self.suspended = true;
+        self.renderer.suspend();
+    }
+
+    /// The OS gave us a native window again (Android: app back in front).
+    pub fn resume(&mut self) {
+        if self.suspended {
+            self.suspended = false;
+            self.renderer.resume(Arc::clone(&self.window));
+            self.resized = true;
+        }
+    }
+
+    pub fn is_suspended(&self) -> bool { self.suspended }
+
+    /// Window size in logical pixels.
+    pub fn logical_size(&self) -> Vec2<f32> {
+        let size = self.window.inner_size().to_logical::<f32>(self.window.scale_factor());
+        Vec2::new(size.width, size.height)
+    }
+
+    pub fn touch(&self) -> &crate::touch::TouchControls { &self.touch }
+
+    pub fn touch_mut(&mut self) -> &mut crate::touch::TouchControls { &mut self.touch }
+
+    pub fn reset_touch(&mut self) { self.touch.reset(&mut self.events); }
+
+    /// Desktop testing aid (`VOXYGEN_TOUCH_EMULATION=1`): turn the left mouse
+    /// button into a finger. Returns true if the event was consumed.
+    pub fn emulate_touch(&mut self, event: &winit::event::WindowEvent) -> bool {
+        use crate::touch::{TouchInput, TouchPhase};
+        use winit::event::{ElementState, MouseButton, WindowEvent};
+        if cfg!(target_os = "android") || !self.touch.enabled() {
+            return false;
+        }
+        let pos = |p: &winit::dpi::PhysicalPosition<f64>, sf: f64| {
+            let l = p.to_logical::<f32>(sf);
+            Vec2::new(l.x, l.y)
+        };
+        let phase = match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.emulated_cursor = pos(position, self.window.scale_factor());
+                if self.emulated_finger != Some(true) {
+                    return true;
+                }
+                TouchPhase::Move
+            },
+            WindowEvent::MouseInput {
+                button: MouseButton::Left,
+                state,
+                ..
+            } => match state {
+                ElementState::Pressed => {
+                    self.emulated_finger = Some(true);
+                    TouchPhase::Start
+                },
+                ElementState::Released => {
+                    self.emulated_finger = Some(false);
+                    TouchPhase::End
+                },
+            },
+            WindowEvent::MouseInput { .. } => return true,
+            _ => return false,
+        };
+        self.touch.handle(
+            TouchInput {
+                id: 0,
+                phase,
+                pos: self.emulated_cursor,
+            },
+            &mut self.events,
+        );
+        true
+    }
 
     pub fn renderer_mut(&mut self) -> &mut Renderer { &mut self.renderer }
 
@@ -396,6 +500,13 @@ impl Window {
 
     pub fn fetch_events(&mut self, settings: &mut Settings) -> Vec<Event> {
         span!(_guard, "fetch_events", "Window::fetch_events");
+
+        // Deferred touch work (long presses, hiding the virtual cursor) goes
+        // before this frame's events.
+        let touch_events = self.touch.on_frame();
+        if !touch_events.is_empty() {
+            drop(self.events.splice(0..0, touch_events));
+        }
 
         let controller = &mut settings.controller;
         // Refresh ui size (used when changing playstates)
@@ -434,6 +545,7 @@ impl Window {
 
             let logical_size =
                 Vec2::from(<(f64, f64)>::from(physical.to_logical::<f64>(scale_factor)));
+            self.touch.set_size(logical_size.map(|v| v as f32));
 
             // Emit event for the UI
             self.events
@@ -727,7 +839,7 @@ impl Window {
         match event {
             DeviceEvent::MouseMotion {
                 delta: (dx, dy), ..
-            } if self.focused => {
+            } if self.focused && !self.touch.enabled() => {
                 // update last input to be Mouse if motion was made
                 self.last_input = LastInput::Mouse;
 
@@ -879,8 +991,19 @@ impl Window {
                 self.focused = state;
                 self.events.push(Event::Focused(state));
             },
+            WindowEvent::Touch(touch) => {
+                let pos = touch.location.to_logical::<f32>(self.window.scale_factor());
+                self.touch.handle(
+                    crate::touch::TouchInput {
+                        id: touch.id,
+                        phase: touch.phase.into(),
+                        pos: Vec2::new(pos.x, pos.y),
+                    },
+                    &mut self.events,
+                );
+            },
             WindowEvent::CursorMoved { position, .. } => {
-                if self.cursor_grabbed {
+                if self.cursor_grabbed && !self.touch.enabled() {
                     self.reset_cursor_position();
                 } else {
                     self.cursor_position = position;
@@ -931,6 +1054,12 @@ impl Window {
         use winit::window::CursorGrabMode;
 
         self.cursor_grabbed = grab;
+        self.touch.set_grabbed(grab, &mut self.events);
+        // There is no real cursor to grab on a touchscreen (winit reports
+        // NotSupported on Android), so skip it rather than log an error.
+        if self.touch.enabled() {
+            return;
+        }
         self.window.set_cursor_visible(!grab);
         let res = if grab {
             self.window

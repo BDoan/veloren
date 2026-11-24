@@ -136,7 +136,12 @@ enum State {
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    surface: wgpu::Surface<'static>,
+    /// `None` while the window has no native surface (Android: app in the
+    /// background). Recreated by [`Renderer::resume`].
+    surface: Option<wgpu::Surface<'static>>,
+    // Kept so the surface can be recreated after Android destroys the window.
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
     surface_config: wgpu::SurfaceConfiguration,
 
     sampler: wgpu::Sampler,
@@ -327,7 +332,8 @@ impl Renderer {
             runtime.block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 // TODO
                 label: None,
-                required_features: wgpu::Features::DEPTH_CLIP_CONTROL
+                // DEPTH_CLIP_CONTROL is only used by debug shapes, so it is optional.
+                required_features: (adapter.features() & wgpu::Features::DEPTH_CLIP_CONTROL)
                     | wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER
                     | wgpu::Features::PUSH_CONSTANTS
                     // Only used for `ExperimentalShader::Wireframe`, so don't gate all builds on
@@ -368,7 +374,17 @@ impl Renderer {
         let max_texture_size = device.limits().max_texture_dimension_2d;
 
         let surface_capabilities = surface.get_capabilities(&adapter);
+        #[cfg(not(target_os = "android"))]
         let format = surface_capabilities.formats[0];
+        // Android drivers may list a linear format first; the shaders expect
+        // an sRGB swapchain.
+        #[cfg(target_os = "android")]
+        let format = surface_capabilities
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(surface_capabilities.formats[0]);
         info!("Using {:?} as the surface format", format);
 
         let present_mode = other_modes.present_mode.into();
@@ -387,7 +403,15 @@ impl Renderer {
                     .find(|mode| PresentMode::try_from(**mode).is_ok())
                     .expect("There should never be no supported present modes")
             },
-            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            // Android WSI often only offers `Inherit`.
+            alpha_mode: if surface_capabilities
+                .alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::Opaque)
+            {
+                wgpu::CompositeAlphaMode::Opaque
+            } else {
+                surface_capabilities.alpha_modes[0]
+            },
             view_formats: Vec::new(),
         };
 
@@ -609,7 +633,9 @@ impl Renderer {
         Ok(Self {
             device,
             queue,
-            surface,
+            surface: Some(surface),
+            instance,
+            adapter,
             surface_config,
 
             state,
@@ -767,7 +793,9 @@ impl Renderer {
             self.resolution = dims;
             self.surface_config.width = dims.x;
             self.surface_config.height = dims.y;
-            self.surface.configure(&self.device, &self.surface_config);
+            if let Some(surface) = &self.surface {
+                surface.configure(&self.device, &self.surface_config);
+            }
 
             // Resize other render targets
             let (views, bloom_sizes) = Self::create_rt_views(
@@ -902,8 +930,48 @@ impl Renderer {
         }
     }
 
+    /// The native window is about to be destroyed (Android: app sent to the
+    /// background). Drop the surface; nothing is rendered until [`resume`].
+    ///
+    /// [`resume`]: Renderer::resume
+    pub fn suspend(&mut self) {
+        if self.surface.take().is_some() {
+            info!("Window surface released (suspended)");
+        }
+    }
+
+    /// A new native window is available (Android: app returned to the
+    /// foreground). Recreate the surface with the same format so existing
+    /// pipelines stay valid.
+    pub fn resume(&mut self, window: Arc<winit::window::Window>) {
+        let surface = match self.instance.create_surface(Arc::clone(&window)) {
+            Ok(surface) => surface,
+            Err(err) => {
+                error!(?err, "Failed to recreate the window surface");
+                return;
+            },
+        };
+        let caps = surface.get_capabilities(&self.adapter);
+        if !caps.formats.contains(&self.surface_config.format) {
+            warn!(
+                format = ?self.surface_config.format,
+                available = ?caps.formats,
+                "New surface does not list the previous format"
+            );
+        }
+        if !caps.alpha_modes.contains(&self.surface_config.alpha_mode)
+            && let Some(mode) = caps.alpha_modes.first()
+        {
+            self.surface_config.alpha_mode = *mode;
+        }
+        self.surface = Some(surface);
+        let size = window.inner_size();
+        info!(?size, "Window surface recreated (resumed)");
+        self.on_resize(Vec2::new(size.width, size.height));
+    }
+
     pub fn maintain(&self) {
-        if self.is_minimized {
+        if self.is_minimized || self.surface.is_none() {
             self.queue.submit(std::iter::empty());
         }
 
@@ -1084,7 +1152,7 @@ impl Renderer {
             "Renderer::start_recording_frame"
         );
 
-        if self.is_minimized {
+        if self.is_minimized || self.surface.is_none() {
             return Ok(None);
         }
 
@@ -1269,12 +1337,12 @@ impl Renderer {
             self.recreate_pipelines(new_pipeline_modes);
         }
 
-        let texture = match self.surface.get_current_texture() {
+        let texture = match self.surface.as_ref().expect("checked above").get_current_texture() {
             Ok(texture) => {
                 if texture.suboptimal {
                     warn!("Suboptimal swap chain, recreating");
                     drop(texture);
-                    self.surface.configure(&self.device, &self.surface_config);
+                    self.surface.as_ref().expect("checked above").configure(&self.device, &self.surface_config);
                     return Ok(None);
                 } else {
                     texture
@@ -1283,7 +1351,7 @@ impl Renderer {
             // If lost recreate the swap chain
             Err(err @ wgpu::SurfaceError::Lost) => {
                 warn!("{}. Recreating swap chain. A frame will be missed", err);
-                self.surface.configure(&self.device, &self.surface_config);
+                self.surface.as_ref().expect("checked above").configure(&self.device, &self.surface_config);
                 return Ok(None);
             },
             Err(wgpu::SurfaceError::Timeout) => {
@@ -1294,7 +1362,7 @@ impl Renderer {
             },
             Err(err @ wgpu::SurfaceError::Outdated) => {
                 warn!("{}. Recreating the swapchain", err);
-                self.surface.configure(&self.device, &self.surface_config);
+                self.surface.as_ref().expect("checked above").configure(&self.device, &self.surface_config);
                 return Ok(None);
             },
             Err(err @ (wgpu::SurfaceError::OutOfMemory | wgpu::SurfaceError::Other)) => {

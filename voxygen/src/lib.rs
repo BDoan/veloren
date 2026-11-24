@@ -11,6 +11,7 @@
 
 #[macro_use]
 pub mod ui;
+#[cfg(target_os = "android")] pub mod android;
 pub mod audio;
 pub mod cli;
 pub mod cmd;
@@ -32,6 +33,8 @@ pub mod session;
 pub mod settings;
 #[cfg(feature = "singleplayer")]
 pub mod singleplayer;
+pub mod start;
+pub mod touch;
 pub mod window;
 
 #[cfg(feature = "singleplayer")]
@@ -87,6 +90,7 @@ impl GlobalState {
     /// reverse any temporary effects a state may have made).
     pub fn on_play_state_changed(&mut self) {
         self.window.grab_cursor(false);
+        self.window.reset_touch();
         self.window.needs_refresh_resize();
     }
 

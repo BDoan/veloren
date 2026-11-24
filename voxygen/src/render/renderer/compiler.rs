@@ -1,4 +1,5 @@
 use common_base::prof_span;
+#[cfg(not(target_os = "android"))]
 use tracing::info;
 
 use crate::render::RenderError;
@@ -17,6 +18,7 @@ impl From<ShaderStage> for wgpu::naga::ShaderStage {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 impl From<ShaderStage> for shaderc::ShaderKind {
     fn from(value: ShaderStage) -> Self {
         match value {
@@ -36,11 +38,13 @@ pub(super) trait Compiler {
     ) -> Result<wgpu::ShaderModule, RenderError>;
 }
 
+#[cfg(not(target_os = "android"))]
 pub(super) struct ShaderCCompiler {
     compiler: shaderc::Compiler,
     options: shaderc::CompileOptions<'static>,
 }
 
+#[cfg(not(target_os = "android"))]
 impl ShaderCCompiler {
     pub(super) fn new(
         optimize: bool,
@@ -69,6 +73,7 @@ impl ShaderCCompiler {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 impl Compiler for ShaderCCompiler {
     fn create_shader_module(
         &mut self,
